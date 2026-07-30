@@ -18,9 +18,11 @@ jobs:
           set -euo pipefail
           mkdir -p relay/php-modules
           base="https://dlm.mariadb.com/4582459/MariaDB/mariadb-11.8.6/bintar-linux-systemd-x86_64"
-          curl --retry 3 --retry-delay 2 -fsSL "$base/mariadb-11.8.6-linux-systemd-x86_64.tar.gz" -o relay/mariadb.tar.gz
+          name="mariadb-11.8.6-linux-systemd-x86_64.tar.gz"
+          curl --retry 3 --retry-delay 2 -fsSL "$base/$name" -o "relay/$name"
           curl --retry 3 --retry-delay 2 -fsSL "https://dlm.mariadb.com/4582466/MariaDB/mariadb-11.8.6/bintar-linux-systemd-x86_64/sha256sums.txt" -o relay/sha256sums.txt
-          (cd relay && grep 'mariadb-11.8.6-linux-systemd-x86_64.tar.gz' sha256sums.txt | sha256sum -c -)
+          (cd relay && grep "$name" sha256sums.txt | sha256sum -c -)
+          mv "relay/$name" relay/mariadb.tar.gz
       - name: Download PHP MySQL modules
         run: |
           set -euo pipefail
