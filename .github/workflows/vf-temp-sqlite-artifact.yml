@@ -1,0 +1,27 @@
+name: VF temporary SQLite artifact
+
+on:
+  push:
+    branches:
+      - vf-temp-sqlite-artifact
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified SQLite drop-in
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/aaemnnosttv/wp-sqlite-db/6933d833c51f06746eb5af2dc8478565c985f957/src/db.php" -o db.php
+          test "$(sha1sum db.php | awk '{print $1}')" = "3a01079bb5623b55e806cc1848a75dc0d3539762"
+          php -l db.php
+      - name: Upload SQLite drop-in
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-wp-sqlite-db
+          path: db.php
+          if-no-files-found: error
+          retention-days: 1
