@@ -13,39 +13,19 @@ jobs:
   package-runtime:
     runs-on: ubuntu-latest
     steps:
-      - name: Download and verify MariaDB 11.8.6
+      - name: Download PHP mysqlnd module
         run: |
           set -euo pipefail
-          mkdir -p relay/php-modules
-          base="https://dlm.mariadb.com/4582459/MariaDB/mariadb-11.8.6/bintar-linux-systemd-x86_64"
-          name="mariadb-11.8.6-linux-systemd-x86_64.tar.gz"
-          curl --retry 3 --retry-delay 2 -fsSL "$base/$name" -o "relay/$name"
-          curl --retry 3 --retry-delay 2 -fsSL "https://dlm.mariadb.com/4582466/MariaDB/mariadb-11.8.6/bintar-linux-systemd-x86_64/sha256sums.txt" -o relay/sha256sums.txt
-          (cd relay && grep "$name" sha256sums.txt | sha256sum -c -)
-          mv "relay/$name" relay/mariadb.tar.gz
-      - name: Download PHP MySQL modules
-        run: |
-          set -euo pipefail
-          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/p/php8.4/php8.4-mysql_8.4.23-1~deb13u1_amd64.deb" -o php8.4-mysql.deb
-          dpkg-deb -x php8.4-mysql.deb php-mysql
-          cp php-mysql/usr/lib/php/20240924/mysqli.so relay/php-modules/
-          cp php-mysql/usr/lib/php/20240924/pdo_mysql.so relay/php-modules/
-          sha256sum php8.4-mysql.deb > relay/php8.4-mysql-deb.sha256
-          file relay/php-modules/*.so
-      - name: Write manifest
-        run: |
-          cat > relay/runtime-manifest.json <<'JSON'
-          {
-            "mariadb": "11.8.6",
-            "mariadbDistribution": "linux-systemd-x86_64",
-            "phpApi": "20240924",
-            "phpMysqlPackage": "php8.4-mysql_8.4.23-1~deb13u1_amd64.deb"
-          }
-          JSON
-      - name: Upload runtime artifact
+          mkdir -p relay
+          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/p/php8.4/php8.4-common_8.4.23-1~deb13u1_amd64.deb" -o php8.4-common.deb
+          dpkg-deb -x php8.4-common.deb php-common
+          cp php-common/usr/lib/php/20240924/mysqlnd.so relay/
+          sha256sum php8.4-common.deb > relay/php8.4-common-deb.sha256
+          file relay/mysqlnd.so
+      - name: Upload module
         uses: actions/upload-artifact@v4
         with:
-          name: vf-ops-r15-mariadb-runtime
+          name: vf-ops-r15-php-mysqlnd
           path: relay/
           if-no-files-found: error
           retention-days: 1
