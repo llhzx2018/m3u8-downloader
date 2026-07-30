@@ -13,19 +13,23 @@ jobs:
   package-runtime:
     runs-on: ubuntu-latest
     steps:
-      - name: Download PHP mysqlnd module
+      - name: Download PHP 8.4 CLI and MySQL modules
         run: |
           set -euo pipefail
-          mkdir -p relay
-          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/p/php8.4/php8.4-common_8.4.23-1~deb13u1_amd64.deb" -o php8.4-common.deb
-          dpkg-deb -x php8.4-common.deb php-common
-          cp php-common/usr/lib/php/20240924/mysqlnd.so relay/
-          sha256sum php8.4-common.deb > relay/php8.4-common-deb.sha256
-          file relay/mysqlnd.so
-      - name: Upload module
+          mkdir -p relay/root
+          base="https://ftp.debian.org/debian/pool/main/p/php8.4"
+          for pkg in php8.4-cli php8.4-common php8.4-mysql; do
+            curl --retry 3 --retry-delay 2 -fsSL "$base/${pkg}_8.4.23-1~deb13u1_amd64.deb" -o "$pkg.deb"
+            dpkg-deb -x "$pkg.deb" relay/root
+            sha256sum "$pkg.deb" >> relay/deb-sha256.txt
+          done
+          test -x relay/root/usr/bin/php8.4
+          test -f relay/root/usr/lib/php/20240924/mysqli.so
+          relay/root/usr/bin/php8.4 -n -d extension_dir="$PWD/relay/root/usr/lib/php/20240924" -d extension=mysqli.so -r 'echo PHP_VERSION," ",extension_loaded("mysqli")?"mysqli=YES":"mysqli=NO",PHP_EOL;'
+      - name: Upload PHP runtime
         uses: actions/upload-artifact@v4
         with:
-          name: vf-ops-r15-php-mysqlnd
+          name: vf-ops-r15-php-mysql-runtime
           path: relay/
           if-no-files-found: error
           retention-days: 1
