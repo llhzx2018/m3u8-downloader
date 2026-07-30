@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - vf-temp-sqlite-artifact
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: read
