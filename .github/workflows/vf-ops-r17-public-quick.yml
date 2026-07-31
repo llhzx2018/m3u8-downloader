@@ -1,0 +1,77 @@
+name: VF temporary R17 quick public probe
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - .vf-temp/vf-ops-r17-public-quick-trigger.txt
+      - .github/workflows/vf-ops-r17-public-quick.yml
+
+permissions:
+  contents: read
+
+jobs:
+  quick-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe DNS TLS and HTTP
+        run: |
+          set -uo pipefail
+          cat > probe.sh <<'SH'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          bases=(
+            https://www3.m3u8.one
+            https://ilovem3u8.pages.dev
+            https://cb63b8c9.ilovem3u8.pages.dev
+            https://19d882ca.ilovem3u8.pages.dev
+            https://4906c69c.ilovem3u8.pages.dev
+            https://cb7c511d.ilovem3u8.pages.dev
+            https://19161550.ilovem3u8.pages.dev
+          )
+          paths=(/ /zh/ /sitemap.xml /robots.txt /404.html /problems/ /zh/problems/ /m3u8-player/ /vf-r17-missing-page-404/)
+          printf '{"generatedAt":"%s","bases":[' "$(date -u +%FT%TZ)" > vf-ops-r17-public-quick.json
+          first_base=1
+          for base in "${bases[@]}"; do
+            host="${base#https://}"
+            [ $first_base -eq 0 ] && printf ',' >> vf-ops-r17-public-quick.json
+            first_base=0
+            addrs="$(getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, -)"
+            tls="$(timeout 15 openssl s_client -connect "$host:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ';' | sed 's/"/\\"/g')"
+            printf '{"base":"%s","addresses":"%s","tls":"%s","checks":[' "$base" "$addrs" "$tls" >> vf-ops-r17-public-quick.json
+            first_path=1
+            for path in "${paths[@]}"; do
+              [ $first_path -eq 0 ] && printf ',' >> vf-ops-r17-public-quick.json
+              first_path=0
+              url="$base$path"
+              tmpbody="$(mktemp)"; tmphdr="$(mktemp)"
+              meta="$(curl -L -sS --connect-timeout 10 --max-time 25 -D "$tmphdr" -o "$tmpbody" -w '%{http_code}|%{url_effective}|%{content_type}|%{size_download}|%{time_total}' "$url" 2>&1)"; rc=$?
+              status="${meta%%|*}"; rest="${meta#*|}"; final="${rest%%|*}"; rest="${rest#*|}"; ctype="${rest%%|*}"; rest="${rest#*|}"; bytes="${rest%%|*}"; elapsed="${rest#*|}"
+              if [ $rc -ne 0 ]; then status=0; final=""; ctype=""; bytes=0; elapsed=0; fi
+              title="$(grep -ioPm1 '(?<=<title>).*?(?=</title>)' "$tmpbody" 2>/dev/null | tr '\n' ' ' | sed 's/"/\\"/g')"
+              canonical="$(grep -ioPm1 '<link[^>]+rel=["'\'' ]canonical["'\'' ][^>]*>' "$tmpbody" 2>/dev/null | sed 's/"/\\"/g')"
+              printf '{"url":"%s","status":%s,"final":"%s","contentType":"%s","bytes":%s,"seconds":%s,"title":"%s","canonicalTag":"%s","curlRc":%s}' "$url" "$status" "$final" "$ctype" "$bytes" "$elapsed" "$title" "$canonical" "$rc" >> vf-ops-r17-public-quick.json
+              rm -f "$tmpbody" "$tmphdr"
+            done
+            printf ']}' >> vf-ops-r17-public-quick.json
+          done
+          printf ']}' >> vf-ops-r17-public-quick.json
+          python3 -m json.tool vf-ops-r17-public-quick.json > /tmp/pretty.json && mv /tmp/pretty.json vf-ops-r17-public-quick.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('vf-ops-r17-public-quick.json'))
+          for b in d['bases']:
+              ok=sum(1 for x in b['checks'] if x['status'] and (200 <= x['status'] < 400 or ('missing-page' in x['url'] and x['status']==404)))
+              print(b['base'], 'DNS=' + ('PASS' if b['addresses'] else 'FAIL'), f'HTTP={ok}/{len(b["checks"])}')
+          PY
+          SH
+          bash probe.sh | tee vf-ops-r17-public-quick-summary.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vf-ops-r17-public-quick
+          path: |
+            vf-ops-r17-public-quick.json
+            vf-ops-r17-public-quick-summary.txt
+          if-no-files-found: error
+          retention-days: 1
