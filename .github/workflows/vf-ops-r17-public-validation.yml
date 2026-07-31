@@ -1,0 +1,41 @@
+name: VF temporary R17 public validation
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - .vf-temp/vf-ops-r17-public-validation-trigger.txt
+      - .vf-temp/vf-ops-r17-public-check.py
+      - .github/workflows/vf-ops-r17-public-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  public-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare browser runtime
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet requests selenium
+          command -v google-chrome
+          command -v chromedriver
+          google-chrome --version
+          chromedriver --version
+      - name: Run public validation
+        run: |
+          set -euo pipefail
+          python3 .vf-temp/vf-ops-r17-public-check.py | tee vf-ops-r17-public-validation-summary.json
+      - name: Upload public validation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-ops-r17-public-validation
+          path: |
+            vf-ops-r17-public-validation.json
+            vf-ops-r17-public-validation.md
+            vf-ops-r17-public-validation-summary.json
+          if-no-files-found: error
+          retention-days: 1
