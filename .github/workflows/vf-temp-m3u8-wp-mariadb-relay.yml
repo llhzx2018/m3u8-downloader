@@ -27,6 +27,7 @@ jobs:
           apt-get download \
             mariadb-server-core \
             mariadb-client-core \
+            libaio1t64 \
             liburing2 \
             php8.4-mysql \
             php8.4-xml \
@@ -41,6 +42,7 @@ jobs:
           test -x relay/root/usr/sbin/mariadbd
           test -x relay/root/usr/bin/mariadb-install-db
           test -x relay/root/usr/bin/mariadb
+          test -f relay/root/usr/lib/x86_64-linux-gnu/libaio.so.1t64
           test -f relay/root/usr/lib/php/20240924/mysqli.so
           test -f relay/root/usr/lib/php/20240924/pdo_mysql.so
           file relay/root/usr/sbin/mariadbd relay/root/usr/lib/php/20240924/*.so
@@ -83,4 +85,5 @@ jobs:
           name: vf-tool-m3u8-r171-wordpress-mariadb-runtime
           path: relay/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 1
