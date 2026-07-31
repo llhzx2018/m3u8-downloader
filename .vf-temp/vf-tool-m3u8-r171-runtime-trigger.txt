@@ -1,1 +1,1 @@
-vf-tool-m3u8 V1.22.405 R171 controlled WordPress + MariaDB runtime relay run 2
+vf-tool-m3u8 V1.22.410 R175 final controlled acceptance completed; temporary relay retired
