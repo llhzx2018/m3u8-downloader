@@ -1,0 +1,86 @@
+name: VF temporary vf-tool-m3u8 WordPress MariaDB relay
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .vf-temp/vf-tool-m3u8-r171-runtime-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  package-runtime:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Prepare Debian runtime packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl xz-utils gzip tar dpkg-dev coreutils file
+          mkdir -p relay/debs relay/root relay/wordpress
+          cd relay/debs
+          apt-get download \
+            mariadb-server-core \
+            mariadb-client-core \
+            liburing2 \
+            php8.4-mysql \
+            php8.4-xml \
+            php8.4-curl \
+            php8.4-mbstring \
+            php8.4-zip \
+            libzip5
+          for package in ./*.deb; do
+            dpkg-deb -x "$package" ../root
+          done
+          cd ../..
+          test -x relay/root/usr/sbin/mariadbd
+          test -x relay/root/usr/bin/mariadb-install-db
+          test -x relay/root/usr/bin/mariadb
+          test -f relay/root/usr/lib/php/20240924/mysqli.so
+          test -f relay/root/usr/lib/php/20240924/pdo_mysql.so
+          file relay/root/usr/sbin/mariadbd relay/root/usr/lib/php/20240924/*.so
+
+      - name: Download WordPress 7.0.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --retry 4 --retry-delay 2 -fsSL \
+            "https://wordpress.org/wordpress-7.0.2.tar.gz" \
+            -o wordpress-7.0.2.tar.gz
+          tar -xzf wordpress-7.0.2.tar.gz
+          test -f wordpress/wp-includes/version.php
+          grep -q "wp_version = '7.0.2'" wordpress/wp-includes/version.php
+          rm -rf relay/wordpress
+          mv wordpress relay/wordpress
+
+      - name: Write verified runtime manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mariadb_version="$(dpkg-deb -f relay/debs/mariadb-server-core_*.deb Version)"
+          php_mysql_version="$(dpkg-deb -f relay/debs/php8.4-mysql_*.deb Version)"
+          cat > relay/runtime-manifest.json <<JSON
+          {
+            "wordpress": "7.0.2",
+            "debian": "trixie",
+            "mariadbServerCore": "${mariadb_version}",
+            "phpMysql": "${php_mysql_version}",
+            "phpApi": "20240924",
+            "purpose": "vf-tool-m3u8 V1.22.405 controlled real WordPress and MariaDB acceptance"
+          }
+          JSON
+          find relay -type f -print0 | sort -z | xargs -0 sha256sum > relay/runtime-files.sha256
+          du -sh relay
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-tool-m3u8-r171-wordpress-mariadb-runtime
+          path: relay/
+          if-no-files-found: error
+          retention-days: 1
