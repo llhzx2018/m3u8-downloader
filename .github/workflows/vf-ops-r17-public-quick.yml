@@ -15,58 +15,78 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Prepare HTTP probe
+        run: python3 -m pip install --disable-pip-version-check --quiet requests
       - name: Probe DNS TLS and HTTP
         run: |
-          set -uo pipefail
-          cat > probe.sh <<'SH'
-          #!/usr/bin/env bash
-          set -uo pipefail
-          bases=(
-            https://www3.m3u8.one
-            https://ilovem3u8.pages.dev
-            https://cb63b8c9.ilovem3u8.pages.dev
-            https://19d882ca.ilovem3u8.pages.dev
-            https://4906c69c.ilovem3u8.pages.dev
-            https://cb7c511d.ilovem3u8.pages.dev
-            https://19161550.ilovem3u8.pages.dev
-          )
-          paths=(/ /zh/ /sitemap.xml /robots.txt /404.html /problems/ /zh/problems/ /m3u8-player/ /vf-r17-missing-page-404/)
-          printf '{"generatedAt":"%s","bases":[' "$(date -u +%FT%TZ)" > vf-ops-r17-public-quick.json
-          first_base=1
-          for base in "${bases[@]}"; do
-            host="${base#https://}"
-            [ $first_base -eq 0 ] && printf ',' >> vf-ops-r17-public-quick.json
-            first_base=0
-            addrs="$(getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, -)"
-            tls="$(timeout 15 openssl s_client -connect "$host:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ';' | sed 's/"/\\"/g')"
-            printf '{"base":"%s","addresses":"%s","tls":"%s","checks":[' "$base" "$addrs" "$tls" >> vf-ops-r17-public-quick.json
-            first_path=1
-            for path in "${paths[@]}"; do
-              [ $first_path -eq 0 ] && printf ',' >> vf-ops-r17-public-quick.json
-              first_path=0
-              url="$base$path"
-              tmpbody="$(mktemp)"; tmphdr="$(mktemp)"
-              meta="$(curl -L -sS --connect-timeout 10 --max-time 25 -D "$tmphdr" -o "$tmpbody" -w '%{http_code}|%{url_effective}|%{content_type}|%{size_download}|%{time_total}' "$url" 2>&1)"; rc=$?
-              status="${meta%%|*}"; rest="${meta#*|}"; final="${rest%%|*}"; rest="${rest#*|}"; ctype="${rest%%|*}"; rest="${rest#*|}"; bytes="${rest%%|*}"; elapsed="${rest#*|}"
-              if [ $rc -ne 0 ]; then status=0; final=""; ctype=""; bytes=0; elapsed=0; fi
-              title="$(grep -ioPm1 '(?<=<title>).*?(?=</title>)' "$tmpbody" 2>/dev/null | tr '\n' ' ' | sed 's/"/\\"/g')"
-              canonical="$(grep -ioPm1 '<link[^>]+rel=["'\'' ]canonical["'\'' ][^>]*>' "$tmpbody" 2>/dev/null | sed 's/"/\\"/g')"
-              printf '{"url":"%s","status":%s,"final":"%s","contentType":"%s","bytes":%s,"seconds":%s,"title":"%s","canonicalTag":"%s","curlRc":%s}' "$url" "$status" "$final" "$ctype" "$bytes" "$elapsed" "$title" "$canonical" "$rc" >> vf-ops-r17-public-quick.json
-              rm -f "$tmpbody" "$tmphdr"
-            done
-            printf ']}' >> vf-ops-r17-public-quick.json
-          done
-          printf ']}' >> vf-ops-r17-public-quick.json
-          python3 -m json.tool vf-ops-r17-public-quick.json > /tmp/pretty.json && mv /tmp/pretty.json vf-ops-r17-public-quick.json
-          python3 - <<'PY'
-          import json
-          d=json.load(open('vf-ops-r17-public-quick.json'))
-          for b in d['bases']:
-              ok=sum(1 for x in b['checks'] if x['status'] and (200 <= x['status'] < 400 or ('missing-page' in x['url'] and x['status']==404)))
-              print(b['base'], 'DNS=' + ('PASS' if b['addresses'] else 'FAIL'), f'HTTP={ok}/{len(b["checks"])}')
+          cat > quick_probe.py <<'PY'
+          import json, re, socket, ssl, time
+          from datetime import datetime, timezone
+          from urllib.parse import urljoin, urlparse
+          import requests
+
+          BASES = [
+              'https://www3.m3u8.one',
+              'https://ilovem3u8.pages.dev',
+              'https://cb63b8c9.ilovem3u8.pages.dev',
+              'https://19d882ca.ilovem3u8.pages.dev',
+              'https://4906c69c.ilovem3u8.pages.dev',
+              'https://cb7c511d.ilovem3u8.pages.dev',
+              'https://19161550.ilovem3u8.pages.dev',
+          ]
+          PATHS = ['/', '/zh/', '/sitemap.xml', '/robots.txt', '/404.html', '/problems/', '/zh/problems/', '/m3u8-player/', '/vf-r17-missing-page-404/']
+
+          def dns(host):
+              try:
+                  return sorted({x[4][0] for x in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)}), None
+              except Exception as exc:
+                  return [], f'{type(exc).__name__}: {exc}'
+
+          def tls(host):
+              try:
+                  ctx = ssl.create_default_context()
+                  with socket.create_connection((host, 443), timeout=12) as sock:
+                      with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                          cert = ssock.getpeercert()
+                  return {'subject': dict(x[0] for x in cert.get('subject', [])), 'issuer': dict(x[0] for x in cert.get('issuer', [])), 'notBefore': cert.get('notBefore'), 'notAfter': cert.get('notAfter')}, None
+              except Exception as exc:
+                  return None, f'{type(exc).__name__}: {exc}'
+
+          report = {'generatedAt': datetime.now(timezone.utc).isoformat(), 'bases': []}
+          session = requests.Session(); session.headers['User-Agent'] = 'VF-Ops-R17-Quick-Probe/1.0'
+          for base in BASES:
+              host = urlparse(base).hostname
+              addresses, dns_error = dns(host)
+              tls_info, tls_error = tls(host)
+              item = {'base': base, 'addresses': addresses, 'dnsError': dns_error, 'tls': tls_info, 'tlsError': tls_error, 'checks': []}
+              for path in PATHS:
+                  url = urljoin(base + '/', path.lstrip('/'))
+                  row = {'url': url, 'status': None, 'finalUrl': None, 'contentType': None, 'bytes': 0, 'elapsedMs': None, 'title': None, 'canonical': None, 'server': None, 'cfRay': None, 'error': None}
+                  started = time.time()
+                  try:
+                      r = session.get(url, timeout=20, allow_redirects=True)
+                      row.update(status=r.status_code, finalUrl=r.url, contentType=r.headers.get('content-type'), bytes=len(r.content), elapsedMs=round((time.time()-started)*1000, 1), server=r.headers.get('server'), cfRay=r.headers.get('cf-ray'))
+                      text = r.text[:500000]
+                      m = re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
+                      if m: row['title'] = ' '.join(m.group(1).split())[:300]
+                      m = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)', text, re.I)
+                      if not m: m = re.search(r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']canonical["\']', text, re.I)
+                      if m: row['canonical'] = m.group(1)
+                  except Exception as exc:
+                      row['elapsedMs'] = round((time.time()-started)*1000, 1)
+                      row['error'] = f'{type(exc).__name__}: {exc}'
+                  item['checks'].append(row)
+              ok = sum(1 for x in item['checks'] if x['status'] and (200 <= x['status'] < 400 or ('missing-page' in x['url'] and x['status'] == 404)))
+              item['summary'] = {'dns': bool(addresses), 'httpPass': f'{ok}/{len(PATHS)}', 'reachable': any(x['status'] is not None for x in item['checks'])}
+              report['bases'].append(item)
+          with open('vf-ops-r17-public-quick.json', 'w', encoding='utf-8') as f: json.dump(report, f, ensure_ascii=False, indent=2)
+          lines=[]
+          for item in report['bases']:
+              line=f"{item['base']} DNS={'PASS' if item['summary']['dns'] else 'FAIL'} HTTP={item['summary']['httpPass']}"
+              lines.append(line); print(line)
+          open('vf-ops-r17-public-quick-summary.txt','w',encoding='utf-8').write('\n'.join(lines)+'\n')
           PY
-          SH
-          bash probe.sh | tee vf-ops-r17-public-quick-summary.txt
+          python3 quick_probe.py
       - uses: actions/upload-artifact@v4
         with:
           name: vf-ops-r17-public-quick
