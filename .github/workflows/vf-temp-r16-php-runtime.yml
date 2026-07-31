@@ -1,0 +1,39 @@
+name: VF temporary R16 PHP runtime relay
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - .vf-temp/vf-ops-r16-php-trigger.txt
+
+permissions:
+  contents: read
+
+jobs:
+  package-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download PHP zip, FPM and libzip runtime
+        run: |
+          set -euo pipefail
+          mkdir -p relay/php-modules relay/php-fpm relay/lib
+          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/p/php8.4/php8.4-zip_8.4.23-1~deb13u1_amd64.deb" -o php8.4-zip.deb
+          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/p/php8.4/php8.4-fpm_8.4.23-1~deb13u1_amd64.deb" -o php8.4-fpm.deb
+          curl --retry 3 --retry-delay 2 -fsSL "https://ftp.debian.org/debian/pool/main/libz/libzip/libzip5_1.11.3-2_amd64.deb" -o libzip5.deb
+          dpkg-deb -x php8.4-zip.deb php-zip
+          dpkg-deb -x php8.4-fpm.deb php-fpm
+          dpkg-deb -x libzip5.deb libzip
+          cp php-zip/usr/lib/php/20240924/zip.so relay/php-modules/
+          cp php-fpm/usr/sbin/php-fpm8.4 relay/php-fpm/
+          cp libzip/usr/lib/x86_64-linux-gnu/libzip.so.5* relay/lib/
+          ldd relay/php-modules/zip.so
+          ldd relay/php-fpm/php-fpm8.4
+          sha256sum php8.4-zip.deb php8.4-fpm.deb libzip5.deb > relay/packages.sha256
+          file relay/php-modules/zip.so relay/php-fpm/php-fpm8.4 relay/lib/*
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-ops-r16-php-runtime
+          path: relay/
+          if-no-files-found: error
+          retention-days: 1
