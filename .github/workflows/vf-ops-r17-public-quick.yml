@@ -26,13 +26,10 @@ jobs:
           import requests
 
           BASES = [
+              'https://www.ilovem3u8.com',
+              'https://ilovem3u8.com',
               'https://www3.m3u8.one',
               'https://ilovem3u8.pages.dev',
-              'https://cb63b8c9.ilovem3u8.pages.dev',
-              'https://19d882ca.ilovem3u8.pages.dev',
-              'https://4906c69c.ilovem3u8.pages.dev',
-              'https://cb7c511d.ilovem3u8.pages.dev',
-              'https://19161550.ilovem3u8.pages.dev',
           ]
           PATHS = ['/', '/zh/', '/sitemap.xml', '/robots.txt', '/404.html', '/problems/', '/zh/problems/', '/m3u8-player/', '/vf-r17-missing-page-404/']
 
@@ -53,7 +50,7 @@ jobs:
                   return None, f'{type(exc).__name__}: {exc}'
 
           report = {'generatedAt': datetime.now(timezone.utc).isoformat(), 'bases': []}
-          session = requests.Session(); session.headers['User-Agent'] = 'VF-Ops-R17-Quick-Probe/1.0'
+          session = requests.Session(); session.headers['User-Agent'] = 'VF-Ops-R17-Canonical-Probe/1.0'
           for base in BASES:
               host = urlparse(base).hostname
               addresses, dns_error = dns(host)
@@ -61,11 +58,11 @@ jobs:
               item = {'base': base, 'addresses': addresses, 'dnsError': dns_error, 'tls': tls_info, 'tlsError': tls_error, 'checks': []}
               for path in PATHS:
                   url = urljoin(base + '/', path.lstrip('/'))
-                  row = {'url': url, 'status': None, 'finalUrl': None, 'contentType': None, 'bytes': 0, 'elapsedMs': None, 'title': None, 'canonical': None, 'server': None, 'cfRay': None, 'error': None}
+                  row = {'url': url, 'status': None, 'finalUrl': None, 'redirectChain': [], 'contentType': None, 'bytes': 0, 'elapsedMs': None, 'title': None, 'canonical': None, 'server': None, 'cfRay': None, 'error': None}
                   started = time.time()
                   try:
                       r = session.get(url, timeout=20, allow_redirects=True)
-                      row.update(status=r.status_code, finalUrl=r.url, contentType=r.headers.get('content-type'), bytes=len(r.content), elapsedMs=round((time.time()-started)*1000, 1), server=r.headers.get('server'), cfRay=r.headers.get('cf-ray'))
+                      row.update(status=r.status_code, finalUrl=r.url, redirectChain=[{'status':h.status_code,'url':h.url,'location':h.headers.get('location')} for h in r.history], contentType=r.headers.get('content-type'), bytes=len(r.content), elapsedMs=round((time.time()-started)*1000, 1), server=r.headers.get('server'), cfRay=r.headers.get('cf-ray'))
                       text = r.text[:500000]
                       m = re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
                       if m: row['title'] = ' '.join(m.group(1).split())[:300]
