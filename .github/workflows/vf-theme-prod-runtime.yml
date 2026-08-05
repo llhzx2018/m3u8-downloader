@@ -77,13 +77,17 @@ jobs:
           done
 
           copy_tree /usr/share/mysql
-          copy_tree /usr/lib/mysql
+          mkdir -p "$ROOT/usr/lib/mysql"
+          sudo tar \
+            --exclude='usr/lib/mysql/plugin/auth_pam_tool_dir' \
+            -C / -cf - usr/lib/mysql \
+            | tar --no-same-owner -C "$ROOT" -xf -
           copy_tree /etc/mysql
 
           if [ -d /usr/lib/mysql/plugin ]; then
             while IFS= read -r -d '' so; do
               collect_deps "$so"
-            done < <(find /usr/lib/mysql/plugin -type f -name '*.so' -print0)
+            done < <(sudo find /usr/lib/mysql/plugin -type f -name '*.so' -print0)
           fi
 
           {
