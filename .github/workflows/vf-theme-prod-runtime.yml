@@ -82,7 +82,6 @@ jobs:
             --exclude='usr/lib/mysql/plugin/auth_pam_tool_dir' \
             -C / -cf - usr/lib/mysql \
             | tar --no-same-owner -C "$ROOT" -xf -
-          copy_tree /etc/mysql
 
           if [ -d /usr/lib/mysql/plugin ]; then
             while IFS= read -r -d '' so; do
