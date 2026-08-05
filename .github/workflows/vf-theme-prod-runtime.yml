@@ -1,0 +1,154 @@
+name: VF Theme production MariaDB runtime
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-theme-prod-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install MariaDB and build prerequisites
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mariadb-server mariadb-client ca-certificates file
+
+      - name: Install PHP 8.4 MySQL modules
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mysqli, pdo_mysql
+          tools: none
+          coverage: none
+
+      - name: Package portable MariaDB runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          OUT="$GITHUB_WORKSPACE/out/mariadb-runtime"
+          ROOT="$OUT/root"
+          mkdir -p "$ROOT"
+
+          copy_abs() {
+            local src="$1"
+            [ -e "$src" ] || return 0
+            mkdir -p "$ROOT$(dirname "$src")"
+            cp -aL "$src" "$ROOT$src"
+          }
+
+          copy_tree() {
+            local src="$1"
+            [ -e "$src" ] || return 0
+            mkdir -p "$ROOT$(dirname "$src")"
+            cp -a "$src" "$ROOT$src"
+          }
+
+          collect_deps() {
+            local bin="$1"
+            [ -x "$bin" ] || return 0
+            ldd "$bin" | awk '/=> \/.*\(/ {print $3} /^\// {print $1}' | sort -u | while read -r lib; do
+              [ -n "$lib" ] && copy_abs "$lib"
+            done
+          }
+
+          for f in \
+            /usr/sbin/mariadbd \
+            /usr/bin/mariadb \
+            /usr/bin/mariadb-admin \
+            /usr/bin/mariadb-check \
+            /usr/bin/mariadb-dump \
+            /usr/bin/mariadb-import \
+            /usr/bin/mariadb-install-db \
+            /usr/bin/mariadb-show \
+            /usr/bin/mariadb-slap \
+            /usr/bin/my_print_defaults \
+            /usr/bin/resolveip; do
+            copy_abs "$f"
+            collect_deps "$f"
+          done
+
+          copy_tree /usr/share/mysql
+          copy_tree /usr/lib/mysql
+          copy_tree /etc/mysql
+
+          # Copy dependencies of storage/auth plugins too.
+          if [ -d /usr/lib/mysql/plugin ]; then
+            while IFS= read -r -d '' so; do
+              collect_deps "$so"
+            done < <(find /usr/lib/mysql/plugin -type f -name '*.so' -print0)
+          fi
+
+          {
+            echo "runner=$(uname -a)"
+            echo "mariadbd=$(/usr/sbin/mariadbd --version)"
+            echo "mariadb_client=$(/usr/bin/mariadb --version)"
+            dpkg-query -W -f='${Package}=${Version}\n' 'mariadb-*' 'galera-*' 2>/dev/null || true
+          } > "$OUT/runtime-manifest.txt"
+
+          cat > "$OUT/run-env.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/root" && pwd)"
+          export MARIADB_RUNTIME_ROOT="$RUNTIME_ROOT"
+          export PATH="$RUNTIME_ROOT/usr/bin:$RUNTIME_ROOT/usr/sbin:$PATH"
+          mapfile -t libdirs < <(find "$RUNTIME_ROOT/lib" "$RUNTIME_ROOT/usr/lib" -type d 2>/dev/null | sort -u)
+          export LD_LIBRARY_PATH="$(IFS=:; echo "${libdirs[*]}")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$@"
+          SH
+          chmod +x "$OUT/run-env.sh"
+
+          tar -C "$GITHUB_WORKSPACE/out" -czf "$GITHUB_WORKSPACE/mariadb-runtime-ubuntu24.tar.gz" mariadb-runtime
+          sha256sum "$GITHUB_WORKSPACE/mariadb-runtime-ubuntu24.tar.gz" > "$GITHUB_WORKSPACE/mariadb-runtime-ubuntu24.tar.gz.sha256"
+          du -sh "$OUT" "$GITHUB_WORKSPACE/mariadb-runtime-ubuntu24.tar.gz"
+
+      - name: Package PHP MySQL modules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          OUT="$GITHUB_WORKSPACE/out/php-mysql-modules"
+          mkdir -p "$OUT/modules"
+          EXT_DIR="$(php -r 'echo ini_get("extension_dir");')"
+          for ext in mysqli pdo_mysql mysqlnd; do
+            if [ -f "$EXT_DIR/$ext.so" ]; then
+              cp -aL "$EXT_DIR/$ext.so" "$OUT/modules/"
+            fi
+          done
+          php -v > "$OUT/php-version.txt"
+          php -i | grep -E '^(PHP API|PHP Extension|Zend Extension|Thread Safety|extension_dir)' > "$OUT/php-abi.txt" || true
+          php -m > "$OUT/php-modules.txt"
+          for so in "$OUT"/modules/*.so; do
+            [ -e "$so" ] || continue
+            echo "### $so" >> "$OUT/module-ldd.txt"
+            ldd "$so" >> "$OUT/module-ldd.txt" || true
+          done
+          tar -C "$GITHUB_WORKSPACE/out" -czf "$GITHUB_WORKSPACE/php84-mysql-modules.tar.gz" php-mysql-modules
+          sha256sum "$GITHUB_WORKSPACE/php84-mysql-modules.tar.gz" > "$GITHUB_WORKSPACE/php84-mysql-modules.tar.gz.sha256"
+          ls -l "$OUT/modules"
+
+      - name: Upload MariaDB runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-mariadb-runtime
+          path: |
+            mariadb-runtime-ubuntu24.tar.gz
+            mariadb-runtime-ubuntu24.tar.gz.sha256
+          retention-days: 3
+          compression-level: 0
+
+      - name: Upload PHP MySQL modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-php84-mysql-modules
+          path: |
+            php84-mysql-modules.tar.gz
+            php84-mysql-modules.tar.gz.sha256
+          retention-days: 3
+          compression-level: 0
