@@ -1,0 +1,43 @@
+name: VF Rank Math official relay
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-rankmath-relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download and verify official Rank Math package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION='1.0.275'
+          URL="https://downloads.wordpress.org/plugin/seo-by-rank-math.${VERSION}.zip"
+          curl --retry 4 --retry-delay 2 -fsSL "$URL" -o seo-by-rank-math.zip
+          unzip -q seo-by-rank-math.zip -d unpacked
+          test -f unpacked/seo-by-rank-math/rank-math.php
+          grep -Eq '^ \* Version:[[:space:]]+1\.0\.275' unpacked/seo-by-rank-math/rank-math.php
+          grep -Eq '^ \* Plugin Name:[[:space:]]+Rank Math SEO' unpacked/seo-by-rank-math/rank-math.php
+          sha256sum seo-by-rank-math.zip > seo-by-rank-math.zip.sha256
+          unzip -t seo-by-rank-math.zip
+          find unpacked/seo-by-rank-math -type f | sort > package-files.txt
+          printf '{"source":"%s","version":"%s","plugin_file":"seo-by-rank-math/rank-math.php"}\n' "$URL" "$VERSION" > package-manifest.json
+
+      - name: Upload verified official package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rank-math-seo-1.0.275-official
+          path: |
+            seo-by-rank-math.zip
+            seo-by-rank-math.zip.sha256
+            package-files.txt
+            package-manifest.json
+          retention-days: 2
+          compression-level: 0
