@@ -54,6 +54,7 @@ jobs:
           collect_deps() {
             local bin="$1"
             [ -x "$bin" ] || return 0
+            file -b "$bin" | grep -q 'ELF' || return 0
             ldd "$bin" | awk '/=> \/.*\(/ {print $3} /^\// {print $1}' | sort -u | while read -r lib; do
               [ -n "$lib" ] && copy_abs "$lib"
             done
@@ -79,7 +80,6 @@ jobs:
           copy_tree /usr/lib/mysql
           copy_tree /etc/mysql
 
-          # Copy dependencies of storage/auth plugins too.
           if [ -d /usr/lib/mysql/plugin ]; then
             while IFS= read -r -d '' so; do
               collect_deps "$so"
