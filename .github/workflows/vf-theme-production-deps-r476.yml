@@ -1,0 +1,76 @@
+name: VF Theme production dependencies R476
+
+on:
+  push:
+    branches:
+      - vf-theme-production-r476
+    paths:
+      - '.github/workflows/vf-theme-production-deps-r476.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install PHP 8.4 WordPress extensions
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mysqli, pdo_mysql, curl, dom, simplexml, mbstring, zip, gd, intl
+          tools: none
+          coverage: none
+
+      - name: Download verified WordPress and plugin packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p payload/packages payload/php/modules payload/php/libs
+          curl --retry 5 --retry-delay 2 -fsSL 'https://wordpress.org/wordpress-7.0.2.zip' -o payload/packages/wordpress-7.0.2.zip
+          curl --retry 5 --retry-delay 2 -fsSL 'https://downloads.wordpress.org/plugin/polylang.latest-stable.zip' -o payload/packages/polylang.zip
+          curl --retry 5 --retry-delay 2 -fsSL 'https://downloads.wordpress.org/plugin/simply-static.3.8.8.zip' -o payload/packages/simply-static-3.8.8.zip
+          curl --retry 5 --retry-delay 2 -fsSL 'https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.275.zip' -o payload/packages/rank-math-1.0.275.zip
+          for zip in payload/packages/*.zip; do unzip -t "$zip"; done
+          unzip -q payload/packages/wordpress-7.0.2.zip -d payload/verify-wordpress
+          test -f payload/verify-wordpress/wordpress/wp-includes/version.php
+          grep -q "wp_version = '7.0.2'" payload/verify-wordpress/wordpress/wp-includes/version.php
+          sha256sum payload/packages/*.zip > payload/packages/SHA256SUMS.txt
+
+      - name: Package PHP extension modules and runtime libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          EXT_DIR="$(php -r 'echo ini_get("extension_dir");')"
+          php -v > payload/php/php-version.txt
+          php -m > payload/php/php-modules.txt
+          php -i | grep -E '^(PHP API|PHP Extension|Zend Extension|Thread Safety|extension_dir)' > payload/php/php-abi.txt || true
+          for ext in mysqli pdo_mysql mysqlnd curl dom simplexml mbstring zip gd intl xml xmlreader xmlwriter; do
+            if [ -f "$EXT_DIR/$ext.so" ]; then cp -aL "$EXT_DIR/$ext.so" payload/php/modules/; fi
+          done
+          for so in payload/php/modules/*.so; do
+            echo "### $so" >> payload/php/module-ldd.txt
+            ldd "$so" | tee -a payload/php/module-ldd.txt | awk '/=> \/.*\(/ {print $3} /^\// {print $1}' | while read -r lib; do
+              case "$lib" in
+                */libc.so.*|*/libm.so.*|*/libpthread.so.*|*/libdl.so.*|*/librt.so.*|*/ld-linux*|*/libgcc_s.so.*|*/libstdc++.so.*) continue ;;
+              esac
+              [ -f "$lib" ] && cp -aL --no-clobber "$lib" payload/php/libs/ || true
+            done
+          done
+          tar -C payload -czf php84-wordpress-extensions.tar.gz php
+          sha256sum php84-wordpress-extensions.tar.gz > php84-wordpress-extensions.tar.gz.sha256
+          find payload/php -type f -printf '%P %s\n' | sort > payload/php/file-list.txt
+
+      - name: Upload production dependencies
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-production-dependencies-r476
+          path: |
+            payload/packages
+            php84-wordpress-extensions.tar.gz
+            php84-wordpress-extensions.tar.gz.sha256
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
