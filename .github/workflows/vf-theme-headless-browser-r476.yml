@@ -1,0 +1,43 @@
+name: VF Theme headless browser R476
+
+on:
+  push:
+    branches:
+      - vf-theme-production-r476
+    paths:
+      - '.github/workflows/vf-theme-headless-browser-r476.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download verified Chrome for Testing headless shell
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION='144.0.7559.96'
+          URL="https://storage.googleapis.com/chrome-for-testing-public/${VERSION}/linux64/chrome-headless-shell-linux64.zip"
+          curl --retry 5 --retry-delay 2 -fsSL "$URL" -o chrome-headless-shell-linux64.zip
+          unzip -t chrome-headless-shell-linux64.zip
+          unzip -q chrome-headless-shell-linux64.zip -d verify
+          test -x verify/chrome-headless-shell-linux64/chrome-headless-shell
+          verify/chrome-headless-shell-linux64/chrome-headless-shell --version | tee CHROME_VERSION.txt
+          grep -q '144.0.7559.96' CHROME_VERSION.txt
+          sha256sum chrome-headless-shell-linux64.zip > SHA256SUMS.txt
+
+      - name: Upload browser relay
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-chrome-headless-144-r476
+          path: |
+            chrome-headless-shell-linux64.zip
+            CHROME_VERSION.txt
+            SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
