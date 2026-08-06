@@ -1,0 +1,35 @@
+name: VF Ops R50 Playwright Browser Relay
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/vf-ops-r50-playwright-browser-relay.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download Playwright Chromium
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --disable-pip-version-check playwright==1.57.0
+          PLAYWRIGHT_BROWSERS_PATH="$PWD/pw-browsers" python -m playwright install chromium
+          find pw-browsers -maxdepth 3 -type f -name 'chrome*' -o -name 'chromium*'
+          tar -C pw-browsers -cf playwright-chromium.tar .
+          sha256sum playwright-chromium.tar > SHA256SUMS.txt
+      - name: Upload browser relay
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-ops-r50-playwright-chromium
+          path: |
+            playwright-chromium.tar
+            SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
