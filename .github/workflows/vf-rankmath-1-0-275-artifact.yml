@@ -1,0 +1,34 @@
+name: VF Rank Math 1.0.275 Validation Artifact
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-rankmath-1-0-275-artifact.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-rank-math:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download official WordPress.org plugin ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 2 \
+            'https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.275.zip' \
+            --output seo-by-rank-math.1.0.275.zip
+          test -s seo-by-rank-math.1.0.275.zip
+          unzip -t seo-by-rank-math.1.0.275.zip
+          sha256sum seo-by-rank-math.1.0.275.zip > SHA256SUMS.txt
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rank-math-1.0.275
+          path: |
+            seo-by-rank-math.1.0.275.zip
+            SHA256SUMS.txt
+          retention-days: 1
+          if-no-files-found: error
