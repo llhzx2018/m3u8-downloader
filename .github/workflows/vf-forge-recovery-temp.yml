@@ -22,42 +22,56 @@ jobs:
       - name: Recover exact historical payload chunks by SHA256
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p /tmp/recovered-segments /tmp/recovery-evidence
+          set -u
+          mkdir -p /tmp/recovered-segments /tmp/recovery-evidence/candidates
+          : > /tmp/recovery-evidence/chunk-map.txt
+          miss=0
 
           recover_file() {
             local path="$1" expected="$2" out="$3" mode="${4:-full}"
             local found=''
+            local safe="$(echo "$path" | tr '/.' '__')"
             while read -r commit; do
               [ -n "$commit" ] || continue
               if git show "$commit:$path" > /tmp/candidate 2>/dev/null; then
                 if [ "$mode" = head20000 ]; then head -c 20000 /tmp/candidate > /tmp/candidate.norm; else cp /tmp/candidate /tmp/candidate.norm; fi
                 sha="$(sha256sum /tmp/candidate.norm | awk '{print $1}')"
+                bytes="$(wc -c < /tmp/candidate.norm)"
+                printf 'CANDIDATE | %s | %s | %s | %s\n' "$path" "$commit" "$sha" "$bytes" >> /tmp/recovery-evidence/candidate-map.txt
+                cp /tmp/candidate.norm "/tmp/recovery-evidence/candidates/${safe}_${commit}.txt"
                 if [ "$sha" = "$expected" ]; then
                   cp /tmp/candidate.norm "$out"
-                  printf '%s | %s | %s | %s\n' "$path" "$commit" "$sha" "$(wc -c < "$out")" | tee -a /tmp/recovery-evidence/chunk-map.txt
+                  printf 'FOUND | %s | %s | %s | %s\n' "$path" "$commit" "$sha" "$bytes" | tee -a /tmp/recovery-evidence/chunk-map.txt
                   found=1
                   break
                 fi
               fi
             done < <(git log --format='%H' --all -- "$path")
             if [ -z "$found" ]; then
-              echo "MISSING_EXACT_CHUNK $path $expected" | tee -a /tmp/recovery-evidence/chunk-map.txt
+              echo "MISSING_EXACT_CHUNK | $path | $expected" | tee -a /tmp/recovery-evidence/chunk-map.txt
               return 1
             fi
+            return 0
           }
 
-          recover_file .vf-ci/part00 07e2201dcd2b4a7012286b8f914ac5076c6c6aad6acd8e314b6bdf5d351b53b3 /tmp/recovered-segments/00
-          recover_file .vf-ci/part01 581ce7f0fbe2253025bbbee13bd8a76a9eea58d373e3ba976c62f66cee1625dc /tmp/recovered-segments/01
-          recover_file .vf-ci/part02 9640e516a279634c897704290d2d62e7c81f461da84dd7f84cfb3c61aec823c9 /tmp/recovered-segments/02
-          recover_file .vf-ci/part03 c71bd8182118778cf2afea52bba6f2a2b41a67391d7172898e424063cff4a9cc /tmp/recovered-segments/03
-          recover_file .vf-ci/part04 d61aa0f9f2c57ef54fcba2dc6a1197311403cb0fb951ac787812a41ab5b308b8 /tmp/recovered-segments/04
-          recover_file .vf-ci/part05 a3449b1658b45a82c584385646d6979c56af591ca5c053241a8c5be364a9a172 /tmp/recovered-segments/05
-          recover_file .vf-ci/rest   edfd01e6f46807600adf068ad43104e9019cad8d7217191df1b26da45adcfb51 /tmp/recovered-segments/06 head20000
-          recover_file .vf-ci/part07 5677c556457eb042ea2db55684d3d5fb88e3269c31b0813a55b865e2738c9fb8 /tmp/recovered-segments/07
-          recover_file .vf-ci/part08 ddb907326942eb4391ba2c0883d1bce3b1605053a380669d4eb4c7180027f4c9 /tmp/recovered-segments/08
-          recover_file .vf-ci/part09 45cdec81e7f9c47377d6a5a1d8186350595441fb0b6017fc5fe297d26c890f78 /tmp/recovered-segments/09
+          recover_file .vf-ci/part00 07e2201dcd2b4a7012286b8f914ac5076c6c6aad6acd8e314b6bdf5d351b53b3 /tmp/recovered-segments/00 || miss=$((miss+1))
+          recover_file .vf-ci/part01 581ce7f0fbe2253025bbbee13bd8a76a9eea58d373e3ba976c62f66cee1625dc /tmp/recovered-segments/01 || miss=$((miss+1))
+          recover_file .vf-ci/part02 9640e516a279634c897704290d2d62e7c81f461da84dd7f84cfb3c61aec823c9 /tmp/recovered-segments/02 || miss=$((miss+1))
+          recover_file .vf-ci/part03 c71bd8182118778cf2afea52bba6f2a2b41a67391d7172898e424063cff4a9cc /tmp/recovered-segments/03 || miss=$((miss+1))
+          recover_file .vf-ci/part04 d61aa0f9f2c57ef54fcba2dc6a1197311403cb0fb951ac787812a41ab5b308b8 /tmp/recovered-segments/04 || miss=$((miss+1))
+          recover_file .vf-ci/part05 a3449b1658b45a82c584385646d6979c56af591ca5c053241a8c5be364a9a172 /tmp/recovered-segments/05 || miss=$((miss+1))
+          recover_file .vf-ci/rest   edfd01e6f46807600adf068ad43104e9019cad8d7217191df1b26da45adcfb51 /tmp/recovered-segments/06 head20000 || miss=$((miss+1))
+          recover_file .vf-ci/part07 5677c556457eb042ea2db55684d3d5fb88e3269c31b0813a55b865e2738c9fb8 /tmp/recovered-segments/07 || miss=$((miss+1))
+          recover_file .vf-ci/part08 ddb907326942eb4391ba2c0883d1bce3b1605053a380669d4eb4c7180027f4c9 /tmp/recovered-segments/08 || miss=$((miss+1))
+          recover_file .vf-ci/part09 45cdec81e7f9c47377d6a5a1d8186350595441fb0b6017fc5fe297d26c890f78 /tmp/recovered-segments/09 || miss=$((miss+1))
 
+          echo "missing_exact_chunks=$miss" | tee /tmp/recovery-evidence/summary.txt
+          if [ "$miss" -ne 0 ]; then
+            echo 'HISTORICAL_PAYLOAD_RECOVERY=PARTIAL' | tee -a /tmp/recovery-evidence/summary.txt
+            exit 2
+          fi
+
+          set -euo pipefail
           cat /tmp/recovered-segments/{00,01,02,03,04,05,06,07,08,09} > /tmp/vf-phase3-min.b64
           test "$(wc -c < /tmp/vf-phase3-min.b64)" = 187256
           echo '62ac17d5fce0783b7575024d64eca85e136fa45ea2da019fa26f8b6e8fd647b7  /tmp/vf-phase3-min.b64' | sha256sum -c -
