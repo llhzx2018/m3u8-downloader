@@ -1,4 +1,4 @@
-name: VF Forge Historical V2 Payload Diagnostics
+name: VF Forge Exact Prefix Extension
 
 on:
   push:
@@ -11,75 +11,75 @@ permissions:
   contents: read
 
 jobs:
-  diagnose-v2:
+  verify-prefix:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Diagnose v2 payload bytes
+      - name: Verify repaired chunk05 and extend source prefix
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/v2 /tmp/evidence
-          for n in 00 01 02 03; do git show 35dc46ad:.vf-ci-v2/chunk$n > /tmp/v2/chunk$n; done
-          cat /tmp/v2/chunk{00,01,02,03} > /tmp/v2/payload.b64
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, base64, binascii
-          allowed=set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\r\n\t ')
-          strict=set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
-          lines=[]
-          allb=Path('/tmp/v2/payload.b64').read_bytes()
-          lines += [f'total={len(allb)}', f'sha256={hashlib.sha256(allb).hexdigest()}']
-          for n in ['00','01','02','03']:
-              b=Path('/tmp/v2/chunk'+n).read_bytes()
-              bad=[(i,x) for i,x in enumerate(b) if x not in strict]
-              lines.append(f'chunk{n}: bytes={len(b)} sha={hashlib.sha256(b).hexdigest()} bad_count={len(bad)}')
-              for i,x in bad[:40]:
-                  ctx=b[max(0,i-24):min(len(b),i+25)]
-                  lines.append(f'  bad pos={i} byte=0x{x:02x} ctx={ctx!r}')
-          badall=[(i,x) for i,x in enumerate(allb) if x not in strict]
-          lines.append(f'all_bad_count={len(badall)}')
-          for i,x in badall[:100]:
-              ctx=allb[max(0,i-32):min(len(allb),i+33)]
-              lines.append(f'all bad pos={i} byte=0x{x:02x} ctx={ctx!r}')
-          # Remove only ASCII whitespace; this is unambiguous for Base64 transport.
-          clean=b''.join(allb.split())
-          lines.append(f'whitespace_clean_bytes={len(clean)} sha={hashlib.sha256(clean).hexdigest()}')
-          try:
-              dec=base64.b64decode(clean, validate=True)
-              Path('/tmp/v2/payload.cleaned.xz').write_bytes(dec)
-              lines.append(f'strict_decode=PASS decoded_bytes={len(dec)} decoded_sha={hashlib.sha256(dec).hexdigest()}')
-          except Exception as e:
-              lines.append(f'strict_decode=FAIL {type(e).__name__}: {e}')
-          Path('/tmp/evidence/diagnostics.txt').write_text('\n'.join(lines)+'\n')
-          print('\n'.join(lines))
-          PY
-          if [ -f /tmp/v2/payload.cleaned.xz ]; then
-            set +e
-            xz -t /tmp/v2/payload.cleaned.xz > /tmp/evidence/xz-test.txt 2>&1
-            rc=$?
-            set -e
-            echo "xz_test_rc=$rc" | tee -a /tmp/evidence/diagnostics.txt
-            cat /tmp/evidence/xz-test.txt || true
-            if [ "$rc" -eq 0 ]; then
-              mkdir -p /tmp/recovered
-              tar -xJf /tmp/v2/payload.cleaned.xz -C /tmp/recovered
-              find /tmp/recovered -type f -printf '%P\n' | sort > /tmp/evidence/files.txt
-              find /tmp/recovered -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/evidence/file-sha256.txt
-              tar -C /tmp/recovered -czf /tmp/v2/recovered-v2.tar.gz .
-            fi
+          mkdir -p /tmp/chunks /tmp/evidence /tmp/extract
+          git show 60200f0afe4fa3dfabb979786f943ef3f36df392:.vf-ci/part00 > /tmp/chunks/00
+          git show f04fcba7de93b7053f9997a7b00681433e95b423:.vf-ci/part01 > /tmp/chunks/01
+          git show c43cb3228e6f89bb9070aed444dab1807beeca49:.vf-ci/part02 > /tmp/chunks/02
+          git show 3b21f48634ab37355c636f59d0d1e8c19f2e8550:.vf-ci/part03 > /tmp/chunks/03
+          git show 5eb6c639007df67e029fd796f600e68646a843c0:.vf-ci/part04 > /tmp/chunks/04
+          git show 1fc33d540e20055921a7ee2cb635402b6fdafee4:.vf-ci-fix/p05a > /tmp/chunks/05fix
+          git show 1fc33d540e20055921a7ee2cb635402b6fdafee4:.vf-ci-cur/p05a > /tmp/chunks/current-c00
+
+          for f in /tmp/chunks/*; do printf '%s bytes=%s sha=%s\n' "$(basename "$f")" "$(wc -c < "$f")" "$(sha256sum "$f" | awk '{print $1}')"; done | tee /tmp/evidence/chunks.txt
+
+          expected05='a3449b1658b45a82c584385646d6979c56af591ca5c053241a8c5be364a9a172'
+          actual05="$(sha256sum /tmp/chunks/05fix | awk '{print $1}')"
+          if [ "$actual05" = "$expected05" ]; then
+            echo 'CHUNK05_EXACT=PASS' | tee /tmp/evidence/result.txt
+          else
+            echo "CHUNK05_EXACT=FAIL expected=$expected05 actual=$actual05" | tee /tmp/evidence/result.txt
           fi
-      - name: Upload diagnostics
+
+          cat /tmp/chunks/00 /tmp/chunks/01 /tmp/chunks/02 /tmp/chunks/03 /tmp/chunks/04 > /tmp/prefix90.b64
+          if [ "$actual05" = "$expected05" ]; then cat /tmp/chunks/05fix >> /tmp/prefix90.b64; fi
+          cp /tmp/prefix90.b64 /tmp/prefix.b64
+          printf 'prefix_bytes=%s\nprefix_sha=%s\n' "$(wc -c < /tmp/prefix.b64)" "$(sha256sum /tmp/prefix.b64 | awk '{print $1}')" | tee -a /tmp/evidence/result.txt
+          base64 -d /tmp/prefix.b64 > /tmp/prefix.xz
+
+          set +e
+          xz -dc /tmp/prefix.xz > /tmp/partial.tar 2> /tmp/evidence/xz-partial.stderr
+          xzrc=$?
+          set -e
+          echo "partial_xz_rc=$xzrc partial_tar_bytes=$(wc -c < /tmp/partial.tar)" | tee -a /tmp/evidence/result.txt
+          set +e
+          tar -xf /tmp/partial.tar -C /tmp/extract 2> /tmp/evidence/tar-partial.stderr
+          tarrc=$?
+          set -e
+          echo "partial_tar_rc=$tarrc" | tee -a /tmp/evidence/result.txt
+          find /tmp/extract -type f -printf '%P|%s\n' | sort | tee /tmp/evidence/files.txt
+          find /tmp/extract -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/evidence/file-sha256.txt || true
+          if [ -f /tmp/extract/current/app/bootstrap.php ]; then grep "VFAB_VERSION\|VFAB_SCHEMA_VERSION" /tmp/extract/current/app/bootstrap.php | tee /tmp/evidence/version.txt; fi
+
+          # Also see what the current-only 10k prefix can safely yield.
+          cp /tmp/chunks/current-c00 /tmp/current10.b64
+          base64 -d /tmp/current10.b64 > /tmp/current10.xz
+          set +e
+          xz -dc /tmp/current10.xz > /tmp/current10.tar 2> /tmp/evidence/current10-xz.stderr
+          set -e
+          mkdir -p /tmp/current10extract
+          set +e
+          tar -xf /tmp/current10.tar -C /tmp/current10extract 2> /tmp/evidence/current10-tar.stderr
+          set -e
+          find /tmp/current10extract -type f -printf '%P|%s\n' | sort > /tmp/evidence/current10-files.txt || true
+
+          tar -C /tmp/extract -czf /tmp/exact-prefix-extracted.tar.gz . || true
+      - name: Upload prefix evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vf-forge-historical-v2-payload-diagnostics
+          name: vf-forge-exact-prefix-extension
           path: |
             /tmp/evidence/**
-            /tmp/v2/payload.b64
-            /tmp/v2/payload.cleaned.xz
-            /tmp/v2/recovered-v2.tar.gz
+            /tmp/exact-prefix-extracted.tar.gz
           if-no-files-found: warn
           compression-level: 0
