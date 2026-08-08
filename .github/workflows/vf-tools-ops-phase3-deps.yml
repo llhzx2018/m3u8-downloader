@@ -1,0 +1,47 @@
+name: VF Tools Ops Phase3 dependency relay
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-tools-ops-phase3-deps.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Download Debian 13 runtime packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out/debs
+          docker run --rm -v "$PWD/out:/out" debian:13 bash -lc '
+            set -euxo pipefail
+            apt-get update
+            apt-cache policy mariadb-server php8.4-mysql php8.4-zip php8.4-mbstring > /out/debian-package-policy.txt
+            apt-get install -y --download-only \
+              -o Dir::Cache::archives=/out/debs \
+              mariadb-server mariadb-client php8.4-mysql php8.4-zip php8.4-mbstring
+            chown -R 1001:1001 /out
+          '
+          find out/debs -maxdepth 1 -type f -name '*.deb' -print0 | sort -z | xargs -0 sha256sum > out/debs.sha256
+
+      - name: Download WordPress release
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl --retry 4 --retry-delay 2 -fsSL https://wordpress.org/wordpress-7.0.3.zip -o out/wordpress-7.0.3.zip
+          unzip -t out/wordpress-7.0.3.zip
+          sha256sum out/wordpress-7.0.3.zip > out/wordpress-7.0.3.zip.sha256
+          printf '%s\n' 'WordPress=7.0.3' 'Debian=13' 'Purpose=VF Tools Ops Phase3 real-environment bootstrap' > out/relay-manifest.txt
+
+      - name: Upload dependency relay artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-tools-ops-phase3-deps-20260809
+          path: out/
+          retention-days: 2
+          compression-level: 0
