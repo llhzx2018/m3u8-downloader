@@ -1,4 +1,4 @@
-name: VF Forge Historical Source Recovery
+name: VF Forge Historical Fragment Export
 
 on:
   push:
@@ -11,100 +11,56 @@ permissions:
   contents: read
 
 jobs:
-  recover:
+  export:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Recover exact historical payload chunks by SHA256
+      - name: Export raw historical objects
         shell: bash
         run: |
-          set -u
-          mkdir -p /tmp/recovered-segments /tmp/recovery-evidence/candidates
-          : > /tmp/recovery-evidence/chunk-map.txt
-          miss=0
-
-          recover_file() {
-            local path="$1" expected="$2" out="$3" mode="${4:-full}"
-            local found=''
-            local safe="$(echo "$path" | tr '/.' '__')"
-            while read -r commit; do
-              [ -n "$commit" ] || continue
-              if git show "$commit:$path" > /tmp/candidate 2>/dev/null; then
-                if [ "$mode" = head20000 ]; then head -c 20000 /tmp/candidate > /tmp/candidate.norm; else cp /tmp/candidate /tmp/candidate.norm; fi
-                sha="$(sha256sum /tmp/candidate.norm | awk '{print $1}')"
-                bytes="$(wc -c < /tmp/candidate.norm)"
-                printf 'CANDIDATE | %s | %s | %s | %s\n' "$path" "$commit" "$sha" "$bytes" >> /tmp/recovery-evidence/candidate-map.txt
-                cp /tmp/candidate.norm "/tmp/recovery-evidence/candidates/${safe}_${commit}.txt"
-                if [ "$sha" = "$expected" ]; then
-                  cp /tmp/candidate.norm "$out"
-                  printf 'FOUND | %s | %s | %s | %s\n' "$path" "$commit" "$sha" "$bytes" | tee -a /tmp/recovery-evidence/chunk-map.txt
-                  found=1
-                  break
-                fi
-              fi
-            done < <(git log --format='%H' --all -- "$path")
-            if [ -z "$found" ]; then
-              echo "MISSING_EXACT_CHUNK | $path | $expected" | tee -a /tmp/recovery-evidence/chunk-map.txt
-              return 1
-            fi
-            return 0
-          }
-
-          recover_file .vf-ci/part00 07e2201dcd2b4a7012286b8f914ac5076c6c6aad6acd8e314b6bdf5d351b53b3 /tmp/recovered-segments/00 || miss=$((miss+1))
-          recover_file .vf-ci/part01 581ce7f0fbe2253025bbbee13bd8a76a9eea58d373e3ba976c62f66cee1625dc /tmp/recovered-segments/01 || miss=$((miss+1))
-          recover_file .vf-ci/part02 9640e516a279634c897704290d2d62e7c81f461da84dd7f84cfb3c61aec823c9 /tmp/recovered-segments/02 || miss=$((miss+1))
-          recover_file .vf-ci/part03 c71bd8182118778cf2afea52bba6f2a2b41a67391d7172898e424063cff4a9cc /tmp/recovered-segments/03 || miss=$((miss+1))
-          recover_file .vf-ci/part04 d61aa0f9f2c57ef54fcba2dc6a1197311403cb0fb951ac787812a41ab5b308b8 /tmp/recovered-segments/04 || miss=$((miss+1))
-          recover_file .vf-ci/part05 a3449b1658b45a82c584385646d6979c56af591ca5c053241a8c5be364a9a172 /tmp/recovered-segments/05 || miss=$((miss+1))
-          recover_file .vf-ci/rest   edfd01e6f46807600adf068ad43104e9019cad8d7217191df1b26da45adcfb51 /tmp/recovered-segments/06 head20000 || miss=$((miss+1))
-          recover_file .vf-ci/part07 5677c556457eb042ea2db55684d3d5fb88e3269c31b0813a55b865e2738c9fb8 /tmp/recovered-segments/07 || miss=$((miss+1))
-          recover_file .vf-ci/part08 ddb907326942eb4391ba2c0883d1bce3b1605053a380669d4eb4c7180027f4c9 /tmp/recovered-segments/08 || miss=$((miss+1))
-          recover_file .vf-ci/part09 45cdec81e7f9c47377d6a5a1d8186350595441fb0b6017fc5fe297d26c890f78 /tmp/recovered-segments/09 || miss=$((miss+1))
-
-          echo "missing_exact_chunks=$miss" | tee /tmp/recovery-evidence/summary.txt
-          if [ "$miss" -ne 0 ]; then
-            echo 'HISTORICAL_PAYLOAD_RECOVERY=PARTIAL' | tee -a /tmp/recovery-evidence/summary.txt
-            exit 2
-          fi
-
           set -euo pipefail
-          cat /tmp/recovered-segments/{00,01,02,03,04,05,06,07,08,09} > /tmp/vf-phase3-min.b64
-          test "$(wc -c < /tmp/vf-phase3-min.b64)" = 187256
-          echo '62ac17d5fce0783b7575024d64eca85e136fa45ea2da019fa26f8b6e8fd647b7  /tmp/vf-phase3-min.b64' | sha256sum -c -
-          base64 -d /tmp/vf-phase3-min.b64 > /tmp/vf-phase3-min.tar.xz
-          echo '1aeee2207232523c97a1336f0d399a8fc96d55cfc83afc06cb8aa6f6680ce75a  /tmp/vf-phase3-min.tar.xz' | sha256sum -c -
-          xz -t /tmp/vf-phase3-min.tar.xz
-
-          mkdir -p /tmp/vf-recovered
-          tar -xJf /tmp/vf-phase3-min.tar.xz -C /tmp/vf-recovered
-          grep -q "define('VFAB_VERSION', '1.23.0')" /tmp/vf-recovered/current/app/bootstrap.php
-          grep -q "define('VFAB_SCHEMA_VERSION', 17)" /tmp/vf-recovered/current/app/bootstrap.php
-          grep -q "define('VFAB_VERSION', '1.21.1')" /tmp/vf-recovered/baseline/app/bootstrap.php
-
-          find /tmp/vf-recovered/current -type f -printf '%P\n' | sort > /tmp/recovery-evidence/current-files.txt
-          find /tmp/vf-recovered/current -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/recovery-evidence/current-file-sha256.txt
-          find /tmp/vf-recovered/baseline -type f -printf '%P\n' | sort > /tmp/recovery-evidence/baseline-files.txt
-          printf 'current_file_count=%s\n' "$(wc -l < /tmp/recovery-evidence/current-files.txt)" >> /tmp/recovery-evidence/summary.txt
-          printf 'baseline_file_count=%s\n' "$(wc -l < /tmp/recovery-evidence/baseline-files.txt)" >> /tmp/recovery-evidence/summary.txt
-          printf 'payload_b64_sha256=%s\n' "$(sha256sum /tmp/vf-phase3-min.b64 | awk '{print $1}')" >> /tmp/recovery-evidence/summary.txt
-          printf 'payload_xz_sha256=%s\n' "$(sha256sum /tmp/vf-phase3-min.tar.xz | awk '{print $1}')" >> /tmp/recovery-evidence/summary.txt
-          echo 'HISTORICAL_PAYLOAD_RECOVERY=PASS' >> /tmp/recovery-evidence/summary.txt
-
-          tar -C /tmp/vf-recovered -czf /tmp/vf-forge-historical-phase3-payload-recovered.tar.gz current baseline
-          sha256sum /tmp/vf-forge-historical-phase3-payload-recovered.tar.gz > /tmp/recovery-evidence/recovered-tar.sha256
-          cat /tmp/recovery-evidence/summary.txt
-
-      - name: Upload recovery evidence and recovered payload
-        if: always()
+          mkdir -p /tmp/raw /tmp/evidence
+          git show aea66d8091aab595fc2e16c86891e0b0834ae3b6:.vf-ci/part05 > /tmp/raw/part05-original
+          git show 6410e0aa9813115ece22cee803f2fc779580840b:.vf-ci/part05 > /tmp/raw/part05-repair
+          git show 71833cb47927d2a2bd9f6e8b0eaedc224fe7fcdb:.vf-ci/rest > /tmp/raw/rest
+          git show ce2cf857df2142e68b4968b1dd5897f15caf2e89:.vf-ci/part07 > /tmp/raw/part07
+          git show fa4fb13e93bb1b4c322a0a589011d48deaa75db8:.vf-ci/part08 > /tmp/raw/part08
+          git show 59896e24eb288eed0bc7ce1f951400fcb1780885:.vf-ci/part09 > /tmp/raw/part09
+          for f in /tmp/raw/*; do printf '%s bytes=%s sha=%s\n' "$(basename "$f")" "$(wc -c < "$f")" "$(sha256sum "$f" | awk '{print $1}')"; done | tee /tmp/evidence/raw-map.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          expected={
+            '06':'edfd01e6f46807600adf068ad43104e9019cad8d7217191df1b26da45adcfb51',
+            '07':'5677c556457eb042ea2db55684d3d5fb88e3269c31b0813a55b865e2738c9fb8',
+            '08':'ddb907326942eb4391ba2c0883d1bce3b1605053a380669d4eb4c7180027f4c9',
+            '09':'45cdec81e7f9c47377d6a5a1d8186350595441fb0b6017fc5fe297d26c890f78',
+          }
+          data=Path('/tmp/raw/rest').read_bytes()
+          out=[]
+          out.append(f'rest_len={len(data)}')
+          for off in [0,10000,20000,30000,40000,50000,60000]:
+              if off < len(data):
+                  chunk=data[off:off+20000]
+                  out.append(f'rest_window off={off} len={len(chunk)} sha={hashlib.sha256(chunk).hexdigest()}')
+          # Search exact desired 20k chunk hash at every Base64 quantum boundary.
+          for label,want in expected.items():
+              found=[]
+              size=17256 if label=='09' else 20000
+              for off in range(0,max(0,len(data)-size+1),4):
+                  if hashlib.sha256(data[off:off+size]).hexdigest()==want:
+                      found.append(off)
+              out.append(f'expected_{label}_offsets={found}')
+          Path('/tmp/evidence/rest-analysis.txt').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out))
+          PY
+      - name: Upload raw fragments
         uses: actions/upload-artifact@v4
         with:
-          name: vf-forge-historical-source-recovery
+          name: vf-forge-historical-raw-fragments
           path: |
-            /tmp/recovery-evidence/**
-            /tmp/vf-forge-historical-phase3-payload-recovered.tar.gz
-          if-no-files-found: warn
+            /tmp/raw/**
+            /tmp/evidence/**
           compression-level: 0
