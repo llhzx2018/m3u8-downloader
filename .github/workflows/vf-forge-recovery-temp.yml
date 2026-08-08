@@ -1,4 +1,4 @@
-name: VF Forge Historical Fragment Export
+name: VF Forge Historical V2 Payload Recovery
 
 on:
   push:
@@ -11,56 +11,46 @@ permissions:
   contents: read
 
 jobs:
-  export:
+  recover-v2:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Export raw historical objects
+      - name: Reconstruct and inspect v2 payload
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/raw /tmp/evidence
-          git show aea66d8091aab595fc2e16c86891e0b0834ae3b6:.vf-ci/part05 > /tmp/raw/part05-original
-          git show 6410e0aa9813115ece22cee803f2fc779580840b:.vf-ci/part05 > /tmp/raw/part05-repair
-          git show 71833cb47927d2a2bd9f6e8b0eaedc224fe7fcdb:.vf-ci/rest > /tmp/raw/rest
-          git show ce2cf857df2142e68b4968b1dd5897f15caf2e89:.vf-ci/part07 > /tmp/raw/part07
-          git show fa4fb13e93bb1b4c322a0a589011d48deaa75db8:.vf-ci/part08 > /tmp/raw/part08
-          git show 59896e24eb288eed0bc7ce1f951400fcb1780885:.vf-ci/part09 > /tmp/raw/part09
-          for f in /tmp/raw/*; do printf '%s bytes=%s sha=%s\n' "$(basename "$f")" "$(wc -c < "$f")" "$(sha256sum "$f" | awk '{print $1}')"; done | tee /tmp/evidence/raw-map.txt
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib
-          expected={
-            '06':'edfd01e6f46807600adf068ad43104e9019cad8d7217191df1b26da45adcfb51',
-            '07':'5677c556457eb042ea2db55684d3d5fb88e3269c31b0813a55b865e2738c9fb8',
-            '08':'ddb907326942eb4391ba2c0883d1bce3b1605053a380669d4eb4c7180027f4c9',
-            '09':'45cdec81e7f9c47377d6a5a1d8186350595441fb0b6017fc5fe297d26c890f78',
-          }
-          data=Path('/tmp/raw/rest').read_bytes()
-          out=[]
-          out.append(f'rest_len={len(data)}')
-          for off in [0,10000,20000,30000,40000,50000,60000]:
-              if off < len(data):
-                  chunk=data[off:off+20000]
-                  out.append(f'rest_window off={off} len={len(chunk)} sha={hashlib.sha256(chunk).hexdigest()}')
-          # Search exact desired 20k chunk hash at every Base64 quantum boundary.
-          for label,want in expected.items():
-              found=[]
-              size=17256 if label=='09' else 20000
-              for off in range(0,max(0,len(data)-size+1),4):
-                  if hashlib.sha256(data[off:off+size]).hexdigest()==want:
-                      found.append(off)
-              out.append(f'expected_{label}_offsets={found}')
-          Path('/tmp/evidence/rest-analysis.txt').write_text('\n'.join(out)+'\n')
-          print('\n'.join(out))
-          PY
-      - name: Upload raw fragments
+          mkdir -p /tmp/v2 /tmp/evidence
+          for n in 00 01 02 03; do git show 35dc46ad:.vf-ci-v2/chunk$n > /tmp/v2/chunk$n; done
+          cat /tmp/v2/chunk{00,01,02,03} > /tmp/v2/payload.b64
+          printf 'b64_bytes=%s\n' "$(wc -c < /tmp/v2/payload.b64)" | tee /tmp/evidence/summary.txt
+          printf 'b64_sha256=%s\n' "$(sha256sum /tmp/v2/payload.b64 | awk '{print $1}')" | tee -a /tmp/evidence/summary.txt
+          base64 -d /tmp/v2/payload.b64 > /tmp/v2/payload.tar.xz
+          printf 'xz_bytes=%s\n' "$(wc -c < /tmp/v2/payload.tar.xz)" | tee -a /tmp/evidence/summary.txt
+          printf 'xz_sha256=%s\n' "$(sha256sum /tmp/v2/payload.tar.xz | awk '{print $1}')" | tee -a /tmp/evidence/summary.txt
+          xz -t /tmp/v2/payload.tar.xz
+          mkdir -p /tmp/recovered
+          tar -xJf /tmp/v2/payload.tar.xz -C /tmp/recovered
+          find /tmp/recovered -type f -printf '%P\n' | sort | tee /tmp/evidence/files.txt
+          find /tmp/recovered -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/evidence/file-sha256.txt
+          printf 'file_count=%s\n' "$(wc -l < /tmp/evidence/files.txt)" | tee -a /tmp/evidence/summary.txt
+          grep -R "VFAB_VERSION" /tmp/recovered | head -20 | tee /tmp/evidence/version-lines.txt || true
+          grep -R "VFAB_SCHEMA_VERSION" /tmp/recovered | head -20 | tee /tmp/evidence/schema-lines.txt || true
+          if [ -f /tmp/recovered/current/app/bootstrap.php ]; then
+            grep "VFAB_VERSION\|VFAB_SCHEMA_VERSION" /tmp/recovered/current/app/bootstrap.php | tee /tmp/evidence/current-bootstrap-version.txt
+          fi
+          if [ -f /tmp/recovered/app/bootstrap.php ]; then
+            grep "VFAB_VERSION\|VFAB_SCHEMA_VERSION" /tmp/recovered/app/bootstrap.php | tee /tmp/evidence/root-bootstrap-version.txt
+          fi
+          tar -C /tmp/recovered -czf /tmp/v2/recovered-v2.tar.gz .
+          sha256sum /tmp/v2/recovered-v2.tar.gz | tee /tmp/evidence/recovered-v2-tar.sha256
+          echo 'V2_PAYLOAD_RECOVERY=PASS' | tee -a /tmp/evidence/summary.txt
+      - name: Upload recovered v2 payload
         uses: actions/upload-artifact@v4
         with:
-          name: vf-forge-historical-raw-fragments
+          name: vf-forge-historical-v2-payload-recovered
           path: |
-            /tmp/raw/**
             /tmp/evidence/**
+            /tmp/v2/recovered-v2.tar.gz
           compression-level: 0
