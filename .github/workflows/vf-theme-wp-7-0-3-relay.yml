@@ -1,0 +1,33 @@
+name: VF Theme WordPress 7.0.3 relay
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-theme-wp-7-0-3-relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download official WordPress 7.0.3
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 3 --output wordpress-7.0.3.zip https://wordpress.org/wordpress-7.0.3.zip
+          test -s wordpress-7.0.3.zip
+          unzip -t wordpress-7.0.3.zip
+          sha256sum wordpress-7.0.3.zip > wordpress-7.0.3.zip.sha256
+      - name: Upload official WordPress package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-wordpress-7-0-3
+          path: |
+            wordpress-7.0.3.zip
+            wordpress-7.0.3.zip.sha256
+          retention-days: 2
+          compression-level: 0
