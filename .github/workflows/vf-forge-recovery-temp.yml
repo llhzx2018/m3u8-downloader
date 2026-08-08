@@ -1,4 +1,4 @@
-name: VF Forge Historical V2 Payload Recovery
+name: VF Forge Historical V2 Payload Diagnostics
 
 on:
   push:
@@ -11,46 +11,75 @@ permissions:
   contents: read
 
 jobs:
-  recover-v2:
+  diagnose-v2:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Reconstruct and inspect v2 payload
+      - name: Diagnose v2 payload bytes
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p /tmp/v2 /tmp/evidence
           for n in 00 01 02 03; do git show 35dc46ad:.vf-ci-v2/chunk$n > /tmp/v2/chunk$n; done
           cat /tmp/v2/chunk{00,01,02,03} > /tmp/v2/payload.b64
-          printf 'b64_bytes=%s\n' "$(wc -c < /tmp/v2/payload.b64)" | tee /tmp/evidence/summary.txt
-          printf 'b64_sha256=%s\n' "$(sha256sum /tmp/v2/payload.b64 | awk '{print $1}')" | tee -a /tmp/evidence/summary.txt
-          base64 -d /tmp/v2/payload.b64 > /tmp/v2/payload.tar.xz
-          printf 'xz_bytes=%s\n' "$(wc -c < /tmp/v2/payload.tar.xz)" | tee -a /tmp/evidence/summary.txt
-          printf 'xz_sha256=%s\n' "$(sha256sum /tmp/v2/payload.tar.xz | awk '{print $1}')" | tee -a /tmp/evidence/summary.txt
-          xz -t /tmp/v2/payload.tar.xz
-          mkdir -p /tmp/recovered
-          tar -xJf /tmp/v2/payload.tar.xz -C /tmp/recovered
-          find /tmp/recovered -type f -printf '%P\n' | sort | tee /tmp/evidence/files.txt
-          find /tmp/recovered -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/evidence/file-sha256.txt
-          printf 'file_count=%s\n' "$(wc -l < /tmp/evidence/files.txt)" | tee -a /tmp/evidence/summary.txt
-          grep -R "VFAB_VERSION" /tmp/recovered | head -20 | tee /tmp/evidence/version-lines.txt || true
-          grep -R "VFAB_SCHEMA_VERSION" /tmp/recovered | head -20 | tee /tmp/evidence/schema-lines.txt || true
-          if [ -f /tmp/recovered/current/app/bootstrap.php ]; then
-            grep "VFAB_VERSION\|VFAB_SCHEMA_VERSION" /tmp/recovered/current/app/bootstrap.php | tee /tmp/evidence/current-bootstrap-version.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, base64, binascii
+          allowed=set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\r\n\t ')
+          strict=set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+          lines=[]
+          allb=Path('/tmp/v2/payload.b64').read_bytes()
+          lines += [f'total={len(allb)}', f'sha256={hashlib.sha256(allb).hexdigest()}']
+          for n in ['00','01','02','03']:
+              b=Path('/tmp/v2/chunk'+n).read_bytes()
+              bad=[(i,x) for i,x in enumerate(b) if x not in strict]
+              lines.append(f'chunk{n}: bytes={len(b)} sha={hashlib.sha256(b).hexdigest()} bad_count={len(bad)}')
+              for i,x in bad[:40]:
+                  ctx=b[max(0,i-24):min(len(b),i+25)]
+                  lines.append(f'  bad pos={i} byte=0x{x:02x} ctx={ctx!r}')
+          badall=[(i,x) for i,x in enumerate(allb) if x not in strict]
+          lines.append(f'all_bad_count={len(badall)}')
+          for i,x in badall[:100]:
+              ctx=allb[max(0,i-32):min(len(allb),i+33)]
+              lines.append(f'all bad pos={i} byte=0x{x:02x} ctx={ctx!r}')
+          # Remove only ASCII whitespace; this is unambiguous for Base64 transport.
+          clean=b''.join(allb.split())
+          lines.append(f'whitespace_clean_bytes={len(clean)} sha={hashlib.sha256(clean).hexdigest()}')
+          try:
+              dec=base64.b64decode(clean, validate=True)
+              Path('/tmp/v2/payload.cleaned.xz').write_bytes(dec)
+              lines.append(f'strict_decode=PASS decoded_bytes={len(dec)} decoded_sha={hashlib.sha256(dec).hexdigest()}')
+          except Exception as e:
+              lines.append(f'strict_decode=FAIL {type(e).__name__}: {e}')
+          Path('/tmp/evidence/diagnostics.txt').write_text('\n'.join(lines)+'\n')
+          print('\n'.join(lines))
+          PY
+          if [ -f /tmp/v2/payload.cleaned.xz ]; then
+            set +e
+            xz -t /tmp/v2/payload.cleaned.xz > /tmp/evidence/xz-test.txt 2>&1
+            rc=$?
+            set -e
+            echo "xz_test_rc=$rc" | tee -a /tmp/evidence/diagnostics.txt
+            cat /tmp/evidence/xz-test.txt || true
+            if [ "$rc" -eq 0 ]; then
+              mkdir -p /tmp/recovered
+              tar -xJf /tmp/v2/payload.cleaned.xz -C /tmp/recovered
+              find /tmp/recovered -type f -printf '%P\n' | sort > /tmp/evidence/files.txt
+              find /tmp/recovered -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/evidence/file-sha256.txt
+              tar -C /tmp/recovered -czf /tmp/v2/recovered-v2.tar.gz .
+            fi
           fi
-          if [ -f /tmp/recovered/app/bootstrap.php ]; then
-            grep "VFAB_VERSION\|VFAB_SCHEMA_VERSION" /tmp/recovered/app/bootstrap.php | tee /tmp/evidence/root-bootstrap-version.txt
-          fi
-          tar -C /tmp/recovered -czf /tmp/v2/recovered-v2.tar.gz .
-          sha256sum /tmp/v2/recovered-v2.tar.gz | tee /tmp/evidence/recovered-v2-tar.sha256
-          echo 'V2_PAYLOAD_RECOVERY=PASS' | tee -a /tmp/evidence/summary.txt
-      - name: Upload recovered v2 payload
+      - name: Upload diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vf-forge-historical-v2-payload-recovered
+          name: vf-forge-historical-v2-payload-diagnostics
           path: |
             /tmp/evidence/**
+            /tmp/v2/payload.b64
+            /tmp/v2/payload.cleaned.xz
             /tmp/v2/recovered-v2.tar.gz
+          if-no-files-found: warn
           compression-level: 0
