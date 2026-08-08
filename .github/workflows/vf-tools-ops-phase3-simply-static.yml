@@ -1,0 +1,40 @@
+name: VF Tools Ops Phase3 Simply Static relay
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-tools-ops-phase3-simply-static.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download and verify official Simply Static
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION='3.8.8'
+          URL="https://downloads.wordpress.org/plugin/simply-static.${VERSION}.zip"
+          curl --retry 4 --retry-delay 2 -fsSL "$URL" -o simply-static.zip
+          unzip -t simply-static.zip
+          unzip -q simply-static.zip -d unpacked
+          test -f unpacked/simply-static/simply-static.php
+          grep -Eq '^ \* Version:[[:space:]]+3\.8\.8' unpacked/simply-static/simply-static.php
+          sha256sum simply-static.zip > simply-static.zip.sha256
+          find unpacked/simply-static -type f | sort > package-files.txt
+          printf '{"source":"%s","version":"%s","plugin_file":"simply-static/simply-static.php"}\n' "$URL" "$VERSION" > package-manifest.json
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simply-static-3.8.8-official
+          path: |
+            simply-static.zip
+            simply-static.zip.sha256
+            package-files.txt
+            package-manifest.json
+          retention-days: 2
+          compression-level: 0
