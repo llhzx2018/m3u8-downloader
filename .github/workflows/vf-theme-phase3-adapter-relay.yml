@@ -1,0 +1,39 @@
+name: VF Theme Phase 3 adapter relay
+
+on:
+  push:
+    paths:
+      - '.github/workflows/vf-theme-phase3-adapter-relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download official WordPress adapter packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p packages/meta
+          curl --retry 4 -fsSL 'https://downloads.wordpress.org/plugin/polylang.3.8.6.zip' -o packages/polylang.zip
+          curl --retry 4 -fsSL 'https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.275.zip' -o packages/rank-math.zip
+          curl --retry 4 -fsSL 'https://downloads.wordpress.org/plugin/simply-static.latest-stable.zip' -o packages/simply-static.zip
+          for z in packages/*.zip; do unzip -t "$z"; sha256sum "$z"; done > packages/meta/SHA256SUMS.txt
+          unzip -q packages/polylang.zip -d /tmp/pll
+          unzip -q packages/rank-math.zip -d /tmp/rm
+          unzip -q packages/simply-static.zip -d /tmp/ss
+          grep -E '^ \* Version:' /tmp/pll/polylang/polylang.php | head -1 > packages/meta/polylang-version.txt
+          grep -E '^ \* Version:' /tmp/rm/seo-by-rank-math/rank-math.php | head -1 > packages/meta/rank-math-version.txt
+          grep -E '^ \* Version:' /tmp/ss/simply-static/simply-static.php | head -1 > packages/meta/simply-static-version.txt
+          printf '%s\n' 'Sources:' 'https://downloads.wordpress.org/plugin/polylang.3.8.6.zip' 'https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.275.zip' 'https://downloads.wordpress.org/plugin/simply-static.latest-stable.zip' > packages/meta/sources.txt
+      - name: Upload verified packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-theme-phase3-official-adapters
+          path: packages
+          retention-days: 2
+          compression-level: 0
