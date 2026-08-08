@@ -1,0 +1,118 @@
+name: VF Forge Phase3 Temporary Real Environment
+
+on:
+  push:
+    branches:
+      - vf-forge-ci-temp-20260808
+    paths:
+      - '.vf-ci/**'
+      - '.github/workflows/vf-forge-phase3-temp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase3-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated test branch
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.2 production dependencies
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, sqlite3, zip, fileinfo, openssl
+          coverage: none
+
+      - name: Install sqlite3 CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sqlite3
+
+      - name: Verify runtime
+        run: |
+          set -euo pipefail
+          php -v
+          php -m | grep -Ei 'PDO|pdo_sqlite|sqlite3|zip|fileinfo'
+          php -r 'foreach (["pdo_sqlite","sqlite3","zip","fileinfo"] as $e) { if (!extension_loaded($e)) { fwrite(STDERR, "missing:$e\n"); exit(2); } } echo "PHP_EXTENSIONS_OK\n";'
+          sqlite3 --version
+          tar --version | head -1
+
+      - name: Reconstruct and verify exact VF Forge payload
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vf-segments
+          head -c 20000 .vf-ci/part00 > /tmp/vf-segments/00
+          head -c 10000 .vf-ci/part01 > /tmp/vf-segments/01
+          head -c 20000 .vf-ci/part02 > /tmp/vf-segments/02
+          head -c 20000 .vf-ci/part03 > /tmp/vf-segments/03
+          head -c 20000 .vf-ci/part04 > /tmp/vf-segments/04
+          head -c 20000 .vf-ci/part05 > /tmp/vf-segments/05
+          head -c 20000 .vf-ci/rest   > /tmp/vf-segments/06
+          head -c 20000 .vf-ci/part07 > /tmp/vf-segments/07
+          head -c 20000 .vf-ci/part08 > /tmp/vf-segments/08
+          head -c 17256 .vf-ci/part09 > /tmp/vf-segments/09
+
+          cat > /tmp/segments.sha256 <<'EOF'
+          e9edd8c72d2ae3d8ed116c9b2b053dc40fab3fd615b6767a7ff2efcd43dbc8e4  /tmp/vf-segments/00
+          604e03253840009b0b31eea0361d64845a7735521b284d7d9e412880761c7c96  /tmp/vf-segments/01
+          cabada5137d591471c5de7aaba51134b14b085faa207646cec94e631fafd5988  /tmp/vf-segments/02
+          adf64c4f026ab42fa614ac00ecd9deea5aed50f9de912146edf2ef62f0eb1e00  /tmp/vf-segments/03
+          653dd9897732b47b6562ee1fbb1f970c6b1afc1e54ed76c1361be64b702eb45b  /tmp/vf-segments/04
+          88e005ce7b7af4c91ce19d98d3ca4aaacf618364eb14163a1b3a930c586b0e46  /tmp/vf-segments/05
+          2b3a59aceed8bf62a958ce504774509d28f60bead8f4cc3f66f0addb8f0a06e3  /tmp/vf-segments/06
+          13cb9326192d4029bd13be62a436c10476404374f55446b80d6c7083e8532333  /tmp/vf-segments/07
+          9677c1bea5b22281ad62f34f6f951a58ba052e5767247145c6f09bd4d98b649d  /tmp/vf-segments/08
+          eed9882525b8c3ff0ef8bde9eac3170616c032acf5183cae29a4c8812133f23b  /tmp/vf-segments/09
+          EOF
+          sha256sum -c /tmp/segments.sha256
+
+          cat /tmp/vf-segments/{00,01,02,03,04,05,06,07,08,09} > /tmp/vf-phase3.b64
+          test "$(wc -c < /tmp/vf-phase3.b64)" = "187256"
+          echo 'ea2e17e65a4eed54e64e1bde5e265048143c6e9819c4cc17af4712f2678b610f  /tmp/vf-phase3.b64' | sha256sum -c -
+          base64 -d /tmp/vf-phase3.b64 > /tmp/vf-phase3-min.tar.xz
+          echo 'df1e46b1b8daa7215e98eec9733eb9880a95713b187786c1653c682985268048  /tmp/vf-phase3-min.tar.xz' | sha256sum -c -
+
+          rm -rf /tmp/vf-phase3-src
+          mkdir -p /tmp/vf-phase3-src
+          tar -xJf /tmp/vf-phase3-min.tar.xz -C /tmp/vf-phase3-src
+
+          grep -R "1\.23\.0" /tmp/vf-phase3-src/current/app/Version.php
+          grep -R "1\.21\.1" /tmp/vf-phase3-src/baseline/app/Version.php
+          test -x /tmp/vf-phase3-src/current/tests/phase3-real-env.sh || chmod +x /tmp/vf-phase3-src/current/tests/phase3-real-env.sh
+          echo PAYLOAD_IDENTITY_OK
+
+      - name: Run real PHP SQLite clean dirty and failure tests
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/vf-phase3-run
+          mkdir -p /tmp/vf-phase3-run
+          /tmp/vf-phase3-src/current/tests/phase3-real-env.sh \
+            /tmp/vf-phase3-src/current \
+            /tmp/vf-phase3-src/baseline \
+            /tmp/vf-phase3-run | tee /tmp/vf-phase3-core.log
+
+      - name: Save runner facts
+        if: always()
+        run: |
+          {
+            echo "date_utc=$(date -u +%FT%TZ)"
+            echo "runner=${RUNNER_OS:-unknown} ${RUNNER_ARCH:-unknown}"
+            php -v | head -1 || true
+            sqlite3 --version || true
+            php -m | sort || true
+          } > /tmp/vf-phase3-runner-facts.txt
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-forge-phase3-core-evidence
+          if-no-files-found: warn
+          path: |
+            /tmp/vf-phase3-core.log
+            /tmp/vf-phase3-runner-facts.txt
+            /tmp/vf-phase3-run/**
