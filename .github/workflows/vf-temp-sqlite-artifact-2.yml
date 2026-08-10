@@ -1,4 +1,4 @@
-name: VF temporary SQLite artifact
+name: VF temporary PHP native runtime relay
 
 on:
   push:
@@ -11,17 +11,53 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-latest
+    container: debian:13
     steps:
-      - name: Download verified SQLite drop-in
+      - name: Install native PHP SQLite runtime
+        shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL "https://raw.githubusercontent.com/aaemnnosttv/wp-sqlite-db/6933d833c51f06746eb5af2dc8478565c985f957/src/db.php" -o db.php
-          test "$(sha1sum db.php | awk '{print $1}')" = "3a01079bb5623b55e806cc1848a75dc0d3539762"
-          php -l db.php
-      - name: Upload SQLite drop-in
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            php8.4-cli php8.4-common php8.4-opcache php8.4-readline \
+            php8.4-sqlite3 php8.4-zip sqlite3 libzip4 ca-certificates tar xz-utils
+          php8.4 -v
+          php8.4 -r 'printf("drivers=%s\n", implode(",", PDO::getAvailableDrivers())); if (!in_array("sqlite", PDO::getAvailableDrivers(), true)) exit(11); $p=new PDO("sqlite::memory:"); $p->exec("CREATE VIRTUAL TABLE f USING fts5(x)"); echo "pdo_sqlite_fts5=ok\n"; if (!class_exists("SQLite3")) exit(12); if (!class_exists("ZipArchive")) exit(13); echo "sqlite3_ext=ok\nziparchive=ok\n";'
+          sqlite3 --version
+
+      - name: Build relocatable test runtime bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/vf-native-runtime-root"
+          mkdir -p "$ROOT/usr/bin" "$ROOT/usr/lib/php/20240924" "$ROOT/etc/php/8.4/cli" "$ROOT/meta" "$GITHUB_WORKSPACE/debs"
+          cp -L /usr/bin/php8.4 "$ROOT/usr/bin/php8.4"
+          cp -L /usr/bin/sqlite3 "$ROOT/usr/bin/sqlite3"
+          cp -a /usr/lib/php/20240924/. "$ROOT/usr/lib/php/20240924/"
+          cp -a /etc/php/8.4/cli/. "$ROOT/etc/php/8.4/cli/"
+          php8.4 -v > "$ROOT/meta/php-version.txt"
+          php8.4 -m > "$ROOT/meta/php-modules.txt"
+          php8.4 -r 'echo json_encode(["php"=>PHP_VERSION,"drivers"=>PDO::getAvailableDrivers(),"sqlite"=>SQLite3::version(),"zip"=>ZipArchive::LIBZIP_VERSION], JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES),"\n";' > "$ROOT/meta/runtime.json"
+          dpkg-query -W -f='${Package}\t${Version}\n' php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3 libzip4 | sort > "$ROOT/meta/packages.tsv"
+          ldd /usr/bin/php8.4 > "$ROOT/meta/php-ldd.txt"
+          ldd /usr/lib/php/20240924/pdo_sqlite.so > "$ROOT/meta/pdo-sqlite-ldd.txt"
+          ldd /usr/lib/php/20240924/sqlite3.so > "$ROOT/meta/sqlite3-ldd.txt"
+          ldd /usr/lib/php/20240924/zip.so > "$ROOT/meta/zip-ldd.txt"
+          cd "$GITHUB_WORKSPACE/debs"
+          apt-get download php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3 libzip4
+          cd "$GITHUB_WORKSPACE"
+          tar -czf vf-php84-native-runtime-debian13-amd64.tar.gz vf-native-runtime-root debs
+          sha256sum vf-php84-native-runtime-debian13-amd64.tar.gz > vf-php84-native-runtime-debian13-amd64.tar.gz.sha256
+          cat "$ROOT/meta/runtime.json"
+          cat "$ROOT/meta/packages.tsv"
+          cat vf-php84-native-runtime-debian13-amd64.tar.gz.sha256
+
+      - name: Upload native runtime relay
         uses: actions/upload-artifact@v4
         with:
-          name: vf-wp-sqlite-db
-          path: db.php
+          name: vf-php84-native-runtime-debian13-amd64
+          path: |
+            vf-php84-native-runtime-debian13-amd64.tar.gz
+            vf-php84-native-runtime-debian13-amd64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 1
