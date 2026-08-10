@@ -1,0 +1,44 @@
+name: VF temporary Firefox ESR relay
+
+on:
+  push:
+    branches:
+      - vf-temp-sqlite-artifact
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - name: Install Firefox ESR
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends firefox-esr ca-certificates
+          firefox-esr --version
+      - name: Package generic browser runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/firefox-runtime/usr/bin" "$GITHUB_WORKSPACE/firefox-runtime/usr/lib" "$GITHUB_WORKSPACE/firefox-runtime/meta"
+          cp -a /usr/lib/firefox-esr "$GITHUB_WORKSPACE/firefox-runtime/usr/lib/"
+          cp -aL /usr/bin/firefox-esr "$GITHUB_WORKSPACE/firefox-runtime/usr/bin/firefox-esr"
+          firefox-esr --version > "$GITHUB_WORKSPACE/firefox-runtime/meta/version.txt"
+          ldd /usr/lib/firefox-esr/firefox-esr > "$GITHUB_WORKSPACE/firefox-runtime/meta/ldd.txt" || true
+          tar -czf "$GITHUB_WORKSPACE/vf-firefox-esr-debian13-amd64.tar.gz" -C "$GITHUB_WORKSPACE" firefox-runtime
+          sha256sum "$GITHUB_WORKSPACE/vf-firefox-esr-debian13-amd64.tar.gz" > "$GITHUB_WORKSPACE/vf-firefox-esr-debian13-amd64.tar.gz.sha256"
+          cat "$GITHUB_WORKSPACE/firefox-runtime/meta/version.txt"
+          cat "$GITHUB_WORKSPACE/vf-firefox-esr-debian13-amd64.tar.gz.sha256"
+      - name: Upload generic browser relay
+        uses: actions/upload-artifact@v4
+        with:
+          name: vf-firefox-esr-debian13-amd64
+          path: |
+            vf-firefox-esr-debian13-amd64.tar.gz
+            vf-firefox-esr-debian13-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
