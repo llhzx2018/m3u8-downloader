@@ -20,7 +20,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             php8.4-cli php8.4-common php8.4-opcache php8.4-readline \
-            php8.4-sqlite3 php8.4-zip sqlite3 libzip4 ca-certificates tar xz-utils
+            php8.4-sqlite3 php8.4-zip sqlite3 ca-certificates tar xz-utils
           php8.4 -v
           php8.4 -r 'printf("drivers=%s\n", implode(",", PDO::getAvailableDrivers())); if (!in_array("sqlite", PDO::getAvailableDrivers(), true)) exit(11); $p=new PDO("sqlite::memory:"); $p->exec("CREATE VIRTUAL TABLE f USING fts5(x)"); echo "pdo_sqlite_fts5=ok\n"; if (!class_exists("SQLite3")) exit(12); if (!class_exists("ZipArchive")) exit(13); echo "sqlite3_ext=ok\nziparchive=ok\n";'
           sqlite3 --version
@@ -38,13 +38,13 @@ jobs:
           php8.4 -v > "$ROOT/meta/php-version.txt"
           php8.4 -m > "$ROOT/meta/php-modules.txt"
           php8.4 -r 'echo json_encode(["php"=>PHP_VERSION,"drivers"=>PDO::getAvailableDrivers(),"sqlite"=>SQLite3::version(),"zip"=>ZipArchive::LIBZIP_VERSION], JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES),"\n";' > "$ROOT/meta/runtime.json"
-          dpkg-query -W -f='${Package}\t${Version}\n' php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3 libzip4 | sort > "$ROOT/meta/packages.tsv"
+          dpkg-query -W -f='${Package}\t${Version}\n' php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3 | sort > "$ROOT/meta/packages.tsv"
           ldd /usr/bin/php8.4 > "$ROOT/meta/php-ldd.txt"
           ldd /usr/lib/php/20240924/pdo_sqlite.so > "$ROOT/meta/pdo-sqlite-ldd.txt"
           ldd /usr/lib/php/20240924/sqlite3.so > "$ROOT/meta/sqlite3-ldd.txt"
           ldd /usr/lib/php/20240924/zip.so > "$ROOT/meta/zip-ldd.txt"
           cd "$GITHUB_WORKSPACE/debs"
-          apt-get download php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3 libzip4
+          apt-get download php8.4-cli php8.4-common php8.4-opcache php8.4-readline php8.4-sqlite3 php8.4-zip sqlite3
           cd "$GITHUB_WORKSPACE"
           tar -czf vf-php84-native-runtime-debian13-amd64.tar.gz vf-native-runtime-root debs
           sha256sum vf-php84-native-runtime-debian13-amd64.tar.gz > vf-php84-native-runtime-debian13-amd64.tar.gz.sha256
